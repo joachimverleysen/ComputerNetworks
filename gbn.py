@@ -3,7 +3,7 @@ from enum import Enum
 from queue import Queue
 
 
-class GBN:
+class GBNSender:
     def __init__(self, id, n, packet_amount, channel):
         self.id = id
         self.n = n
@@ -225,7 +225,7 @@ class Channel:
 
     def getConnector(self, id):
         for c in self.connectors:
-            if c.host_id == id:
+            if c.receiver_id == id:
                 return c
         return None
 
@@ -236,50 +236,50 @@ class ChannelConnectorType(Enum):
 
 
 class ChannelConnector:
-    def __init__(self, host_id, host_inbox_queue, type: ChannelConnectorType, channel):
-        self.host_id = host_id
+    def __init__(self, receiver_id, receiver_inbox_queue, type: ChannelConnectorType, channel):
+        self.receiver_id = receiver_id
         self.type = type
         self.channel = channel
-        self.host_inbox_queue = host_inbox_queue
+        self.receiver_inbox_queue = receiver_inbox_queue
 
     def pushItem(self, item: ChannelItem):
         self.channel.handleNewItem(item)
 
     def receive(self, item):
-        self.host_inbox_queue.put(item.seqnum)
+        self.receiver_inbox_queue.put(item.seqnum)
 
 
-def runSimulation(gbn, host, channel):
+def runSimulation(sender, receiver, channel):
     print("Started running.\n")
-    done = gbn.isDone
+    done = sender.isDone
     while not done:
-        gbn.update()
-        host.update()
+        sender.update()
+        receiver.update()
         channel.update()
         time.sleep(0.6)
-        done = gbn.isDone
+        done = sender.isDone
 
 
 
 if __name__ == "__main__":
     channel = Channel(traverse_duration_sec=1)
-    gbn = GBN(id=1, n=7, packet_amount=15, channel=channel)
-    gbn_connector = ChannelConnector(
-            host_id=1,
-            host_inbox_queue=gbn.inbox_queue,
+    sender = GBNSender(id=1, n=7, packet_amount=15, channel=channel)
+    sender_connector = ChannelConnector(
+            receiver_id=1,
+            receiver_inbox_queue=sender.inbox_queue,
             type=ChannelConnectorType(0),
             channel=channel
     )
-    host = Host(id=2, channel=channel)
-    host_connector = ChannelConnector(
-            host_id=2,
-            host_inbox_queue=host.ack_queue,
+    receiver = Host(id=2, channel=channel)
+    receiver_connector = ChannelConnector(
+            receiver_id=2,
+            receiver_inbox_queue=receiver.ack_queue,
             type=ChannelConnectorType(0),
             channel=channel
     )
-    gbn.setReceiver(id=2)
-    host.setReceiver(id=1)
-    channel.addHost(gbn_connector)
-    channel.addHost(host_connector)
-    runSimulation(gbn, host, channel)
+    sender.setReceiver(id=2)
+    receiver.setReceiver(id=1)
+    channel.addHost(sender_connector)
+    channel.addHost(receiver_connector)
+    runSimulation(sender, receiver, channel)
     exit(0)
