@@ -25,12 +25,27 @@ class GBNSender:
         self.timer.restart(self.timeout_duration)
 
     def done(self):
+        """
+            Return True if all the packets have been acknowledged
+
+            Preconditions: 
+            Postconditions: 
+
+        """
         if self.packet_list[-1] in self.acknowledged:
             return True
         return False
 
     def updateWindow(self):
+        """
+            Update window according to base
+
+            Preconditions: 
+            Postconditions: 
+                : window = [base -> base + n]
+        """
         self.window = self.packet_list[self.base:self.base+self.n]
+
     def setReceiver(self, id):
         self.receiver_id = id
 
