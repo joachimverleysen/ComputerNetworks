@@ -2,27 +2,44 @@ import time
 from enum import Enum
 from queue import Queue
 
+SENDER_PACKET_AMOUNT = 10
+SENDER_TIMER_SECONDS = 5
+
+
+class PacketStatus(Enum):
+    WAITING = 0
+    SENT = 1
+    ACKED = 2
+
+
+class SenderPacket():
+    def __init__(self, seqnum):
+        self.seqnum = seqnum
+        self.status = PacketStatus.WAITING 
+
+    def set_status(self, status):
+        self.status = status
+    
+    def get_status(self):
+        return self.status
+
+    def get_seqnum(self):
+        return self.seqnum
+
 
 class GBNSender:
-    def __init__(self, id, n, packet_amount, channel):
-        self.id = id
+    def __init__(self, n, id):
         self.n = n
-        self.packet_amount = packet_amount
-        self.channel = channel
+        self.packet_amount = SENDER_PACKET_AMOUNT
         self.inbox_queue = Queue()
-        self.receiver_id = None
         self.base = 0
-        self.packet_list = [i+1 for i in range(packet_amount)]
-        self.acknowledged = []
-        self.sent_packets = []
-        self.timer = Timer()
-        self.window = self.packet_list[self.base:self.base+n]
-        self.expected_seqnum = None   # First unacknowledged packet
+        self.packets = {i: SenderPacket(i) for i in range(self.packet_amount)}
+        self.timer = Timer(SENDER_TIMER_SECONDS)
         self.next_seqnum = 0   # Next packet to send
-        self.isDone = False
+        self.is_done = False
         self.timeout_duration = 5
 
-        self.timer.restart(self.timeout_duration)
+        self.timer.restart()
 
     def done(self):
         """
@@ -32,269 +49,223 @@ class GBNSender:
             Postconditions: 
 
         """
-        if self.packet_list[-1] in self.acknowledged:
-            return True
-        return False
+        for packet in self.packets.values():
+            if packet.get_status() != PacketStatus.ACKED:
+                return False
+        return True
+    
+    def get_window(self):
+        seqnums = list(self.packets.keys())
+        return seqnums[self.base:self.base + self.n]
 
-    def updateWindow(self):
-        """
-            Update window according to base
+    def get_packet(self, seqnum):
+        return self.packets[seqnum]
 
-            Preconditions: 
-            Postconditions: 
-                : window = [base -> base + n]
-        """
-        self.window = self.packet_list[self.base:self.base+self.n]
-
-    def setReceiver(self, id):
-        self.receiver_id = id
-
-    def getNextSeqnum(self):
-        for seqnum in self.window:
-            if seqnum in self.acknowledged:
+    def get_next_seqnum(self):
+        for seqnum in self.get_window():
+            packet = self.get_packet(seqnum)
+            if packet.get_status() == PacketStatus.ACKED:
                 continue
-            if seqnum in self.sent_packets:
+            if packet.get_status() == PacketStatus.SENT: 
                 continue
-            return seqnum
+            elif packet.get_status() == PacketStatus.WAITING:
+                return seqnum
         return None
 
-    def pushToChannel(self, seqnum):
-        channel_item = ChannelItem(seqnum, self.receiver_id, ChannelItemType(0))
-        self.channel.handleNewItem(channel_item)
-
-    def send(self):
-        # Send the first unacknowledged packet
-        if self.next_seqnum == None:
-            print("Unable to send")
-            return None
-        self.sent_packets.append(self.next_seqnum)
-        self.pushToChannel(self.next_seqnum)
+    def send(self, seqnum):
+        packet = self.packets[seqnum]
+        # insert channel interface logic...
         print(f"Sending packet {self.next_seqnum}")
-        if self.next_seqnum == self.getExpectedSeqnum():
-            self.expected_seqnum = self.next_seqnum
-        return self.next_seqnum
 
-    def acknowledge(self, seqnum):
-        if seqnum in self.acknowledged:
+    def ACK(self, seqnum):
+        """
+          Cumulative Ack: every packet < seqnum is ACK'd.  
+        """
+        if seqnum < self.base:
+            raise "Receiving a redundant or duplicate ACK"
             return
-        self.acknowledged.append(seqnum)
-        self.base += 1
-        self.expected_seqnum += 1
-        if seqnum == self.packet_amount:
-            self.isDone = True
-            print("Last ACK received")
 
-    def handleReceiveACK(self, max_seqnum):
-        print(f"Cumulative ACK  -  {max_seqnum}")
+        packet = self.packets[seqnum]
+        self.acknowledged.append(seqnum)
+        self.base = seqnum + 1 
+
+    def handle_timeout(self):
+        print("Timeout!")
+        self.resend_group()
+
+    def resend_group(self, max_seqnum):
+        print(f"Resending unacknowledged packets lower than {max_seqnum}")
         for seqnum in self.window:
             if seqnum <= max_seqnum:
-                self.acknowledge(seqnum)
-        # Restart timer
-        if self.expected_seqnum in self.acknowledged:
-            self.timer.restart(self.timeout_duration)
-
-    def getExpectedSeqnum(self):
-        for seqnum in self.window:
-            if seqnum not in self.acknowledged:
-                return seqnum
-
-    def handleTimeout(self):
-        print("Timeout!")
-        self.resendGroup()
-
-    def resendGroup(self):
-        if self.expected_seqnum == None:
-            print("Unable to resend")
-        print(f"Resending packets, starting at {self.expected_seqnum}")
-        for seqnum in self.window:
-            if seqnum >= self.expected_seqnum:
-                self.sent_packets.append(seqnum)
-
-    def handleInbox(self):
-        while not self.inbox_queue.empty():
-            new_seqnum = self.inbox_queue.get()
-            self.handleReceiveACK(new_seqnum)
-
-    def update(self):
-        self.handleInbox()
-        self.updateWindow()
-        self.expected_seqnum = self.getExpectedSeqnum()
-        self.next_seqnum = self.getNextSeqnum()
-        self.send()
-        self.isDone = self.done()
-        remaining_time = self.timer.update()
+               self.send(seqnum) 
+    
+    def print_debugs(self):
         print(f"Acks: {self.acknowledged}")
         print(f"Window: {self.window}")
         print(f"Expected: {self.expected_seqnum}")
         print(f"Next seq: {self.next_seqnum}")
-        print(f"Remaining time: {self.timer.remaining}")
+        print(f"Remaining time: {self.timer.remaining_seconds}")
+
+    def update(self):
+        self.send(self.get_next_seqnum())
+        remaining_time = self.timer.update()
         if remaining_time == 0:
-            self.handleTimeout()
-        # Update base
-        # Window slides automatically base = self.expected_seqnum
+            self.handle_timeout()
 
 
 class Timer:
-    def __init__(self):
-        self.remaining = None
-        self.start_time = None
-        self.active = False
+    def __init__(self, duration):
+        self.duration = duration 
+        self.remaining_seconds = None
+        self.start_time = None   # Will be set to the current time when the timer starts
 
-    def hasStopped(self):
-        return not self.active
+    def is_active(self):
+        return self.remaining_seconds > 0
 
-    def restart(self, seconds):
+    def restart(self):
         self.active = True
-        self.remaining = seconds
+        self.remaining_seconds = self.duration 
         self.start_time = time.time()
 
+    def set_duration(self, seconds):
+        self.duration = seconds
+
     def update(self):
-        if not self.active:
+        if not self.is_active():
             return
         now = time.time()
         passed_time = now - self.start_time
-        self.remaining -= passed_time
-        if self.remaining <= 0:
-            self.remaining = 0
-            self.active = False
-        return self.remaining
+        self.remaining_seconds -= max(passed_time, 0)
+        
+        return self.remaining_seconds
 
 
-class Host:
-    def __init__(self, id, channel):
-        self.channel = channel
+class GBNReceiver:
+    def __init__(self):
         self.ack_queue = Queue()
         self.received = []
-        self.expected_seqnum = 0
-        self.receiver_id = None
+        self.expected_seqnum = 0   # Oldest not-received packet
+    
+    def get_expected_seqnum(self):
+        if len(self.received) == 0:
+            return 0
+        else:
+            return self.received[-1] -1
 
-    def handleReceive(self, seqnum):
+    def on_receive(self, seqnum):
         if seqnum == self.expected_seqnum:
             self.received.append(seqnum)
         else:
             print(f"Packet {seqnum} was received out of order and discarded")
         latest_seqnum = self.received[-1]
-        self.sendACK(latest_seqnum)
+        self.send_ack(latest_seqnum)
 
-    def sendACK(self, seqnum):
-        item = ChannelItem(seqnum, self.receiver_id, ChannelItemType(1))
-        channel.handleNewItem(item)
-
-    def setReceiver(self, id):
-        self.receiver_id = id
+    def send_ack(self):
+        seqnum = self.expected_seqnum - 1
+        # insert channel interface logic ...
 
     def update(self):
         while not self.ack_queue.empty():
             seqnum = self.ack_queue.get()
-            self.sendACK(seqnum)
-
-
-class ChannelItem:
-    def __init__(self, seqnum, destination_id, type):
-        self.seqnum = seqnum
-        self.destination_id = destination_id
-        self.type = type
-        self.timer = Timer()
-        self.status = ChannelItemStatus(0)
-
-    def update(self):
-        self.timer.update()
-        if self.timer.hasStopped():
-            self.status = ChannelItemStatus(1)
-        return self.status
-
-
-class ChannelItemStatus(Enum):
-    GOING = 0
-    EXITED = 1
-    KILLED = 2
-
-
-class ChannelItemType(Enum):
-    PACKET = 0
-    ACK = 1
+            self.send_ack(seqnum)
 
 
 class Channel:
-    def __init__(self, traverse_duration_sec):
-        self.connectors = []
-        self.traverse_duration = traverse_duration_sec
-        self.items = []
 
+    class ChannelItem:
+        class ItemStatus(Enum):
+            GOING = 0
+            EXITED = 1
+            KILLED = 2
+
+        def __init__(self, seqnum, destination_id, type):
+            self.seqnum = seqnum
+            self.destination_id = destination_id
+            self.timer = Timer()
+            self.status = ItemStatus.GOING
+        
+        def exit(self):
+            self.status = ItemStatus.EXITED
+
+        def update(self):
+            self.timer.update()
+
+            if not self.timer.is_active():
+                self.exit()
+
+            return self.status
+
+    def __init__(self, traversal_duration_sec):
+        self.connectors = []
+        self.traversal_duration = traversal_duration_sec
+        self.items = []
+    
     def update(self):
+        self.update_items()
+    def update_items(self):
         for item in self.items:
             status = item.update()
-            if status == ChannelItemStatus.EXITED:
+            if status == ItemStatus.EXITED:
                 receiving_connector = self.getConnector(item.destination_id)
                 receiving_connector.receive(item)
                 self.items.remove(item)
-            if status == ChannelItemStatus.KILLED:   # Killed
+            if status == ItemStatus.KILLED:   # Killed
                 self.items.remove(item)
 
-    def addHost(self, connector):
+    def add_host(self, connector):
         self.connectors.append(connector)
 
-    def handleNewItem(self, item):
-        item.timer.restart(self.traverse_duration)
+    def handle_new_item(self, item):
+        item.timer.restart(self.traversal_duration)
         self.items.append(item)
 
     def getConnector(self, id):
         for c in self.connectors:
-            if c.receiver_id == id:
+            if c.id == id:
                 return c
         return None
 
 
-class ChannelConnectorType(Enum):
-    HOST = 0
-    CHANNEL = 1
-
-
-class ChannelConnector:
-    def __init__(self, receiver_id, receiver_inbox_queue, type: ChannelConnectorType, channel):
-        self.receiver_id = receiver_id
-        self.type = type
+class ChannelInterface:
+    def __init__(self, id, inbox_queue, channel):
+        self.id = id
         self.channel = channel
-        self.receiver_inbox_queue = receiver_inbox_queue
+        self.inbox_queue = inbox_queue
 
-    def pushItem(self, item: ChannelItem):
-        self.channel.handleNewItem(item)
+    def pushItem(self, item):
+        self.channel.handle_new_item(item)
 
     def receive(self, item):
-        self.receiver_inbox_queue.put(item.seqnum)
+        self.inbox_queue.put(item.seqnum)
 
 
-def runSimulation(sender, receiver, channel):
+def run_simulation(sender, receiver, channel):
     print("Started running.\n")
-    done = sender.isDone
+    done = sender.is_done
     while not done:
         sender.update()
         receiver.update()
-        channel.update()
+        channel.update_items()
         time.sleep(0.6)
-        done = sender.isDone
+        done = sender.is_done
 
 
 
 if __name__ == "__main__":
-    channel = Channel(traverse_duration_sec=1)
-    sender = GBNSender(id=1, n=7, packet_amount=15, channel=channel)
-    sender_connector = ChannelConnector(
-            receiver_id=1,
-            receiver_inbox_queue=sender.inbox_queue,
-            type=ChannelConnectorType(0),
+    channel = Channel(traversal_duration_sec=1)
+    sender = GBNSender(n=7, id=1)
+    sender_connector = ChannelInterface(
+            id=1,
+            inbox_queue=sender.inbox_queue,
             channel=channel
     )
-    receiver = Host(id=2, channel=channel)
-    receiver_connector = ChannelConnector(
-            receiver_id=2,
-            receiver_inbox_queue=receiver.ack_queue,
-            type=ChannelConnectorType(0),
+    receiver = GBNReceiver()
+    receiver_connector = ChannelInterface(
+            id=2,
+            inbox_queue=receiver.ack_queue,
             channel=channel
     )
-    sender.setReceiver(id=2)
-    receiver.setReceiver(id=1)
-    channel.addHost(sender_connector)
-    channel.addHost(receiver_connector)
-    runSimulation(sender, receiver, channel)
+    channel.add_host(sender_connector)
+    channel.add_host(receiver_connector)
+    run_simulation(sender, receiver, channel)
     exit(0)
