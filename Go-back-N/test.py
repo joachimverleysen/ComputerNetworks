@@ -1,29 +1,37 @@
 # Basic example of testing a module with the "unitest" library
 
 import unittest
+from queue import Queue
+from gbn import GBNSender
+from gbn import Channel
+from gbn import ChannelInterface
 
-class Calculations():
-    def __init__(self, a, b):
-        self.a = a
-        self.b = b
-        
-    def get_sum(self):
-        return self.a + self.b
 
-    def get_difference(self):
-        return self.a - self.b
-        
-    def get_product(self):
-        return self.a * self.b
-        
-    def get_quotient(self):
-        return self.a / self.b
 
-class TestCalculations(unittest.TestCase):
-    def test_sum(self):
-        calculation = Calculations(4, 5)
-        self.assertEqual(calculation.get_sum(), 9)
+class TestChannel(unittest.TestCase):
+    def setUp(self):
+        self.inbox_queue_1 = Queue() 
+        self.inbox_queue_2 = Queue() 
 
+        self.channel = Channel(traversal_duration_sec=1)
+
+        self.connector_1 = ChannelInterface(
+            id=1,
+            inbox_queue=self.inbox_queue_1,
+            channel=self.channel
+        )
+
+        self.connector_2 = ChannelInterface(
+            id=2,
+            inbox_queue=self.inbox_queue_2,
+            channel=self.channel
+        )
+
+    def test_add_host(self):
+        self.channel.add_host(self.connector_1)
+        self.assertEqual(len(self.channel.get_connectors()), 1)
+        self.channel.add_host(self.connector_2)
+        self.assertEqual(len(self.channel.get_connectors()), 2)
 
 if __name__ == "__main__":
     unittest.main()
