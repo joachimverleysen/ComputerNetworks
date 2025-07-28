@@ -202,11 +202,12 @@ class Channel:
     
     def update(self):
         self.update_items()
+
     def update_items(self):
         for item in self.items:
             status = item.update()
             if status == ItemStatus.EXITED:
-                receiving_connector = self.getConnector(item.destination_id)
+                receiving_connector = self.get_connector(item.destination_id)
                 receiving_connector.receive(item)
                 self.items.remove(item)
             if status == ItemStatus.KILLED:   # Killed
@@ -216,14 +217,21 @@ class Channel:
         self.connectors.append(connector)
 
     def handle_new_item(self, item):
-        item.timer.restart(self.traversal_duration)
+        """
+            Adds the item to the list of items
+            Starts the traversal timer for the new item.
+        """
         self.items.append(item)
+        item.timer.restart(self.traversal_duration)
 
-    def getConnector(self, id):
+    def get_connector(self, id):
         for c in self.connectors:
             if c.id == id:
                 return c
         return None
+
+    def get_connectors(self):
+        return self.connectors
 
 
 class ChannelInterface:
